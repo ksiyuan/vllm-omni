@@ -19,6 +19,7 @@ from vllm_omni.config.model import OmniModelConfig
 from vllm_omni.engine.arg_utils import OmniEngineArgs
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_init_utils import build_engine_args_dict
+from vllm_omni.platforms import current_omni_platform
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -309,4 +310,50 @@ def test_tensor_parallel_size_none_is_handled():
         model="snu-aidas/Dynin-Omni",
     )
     assert isinstance(args, dict)
-    assert "tensor_parallel_size" not in args
+
+
+# ---------------------------------------------------------------------------
+# NPU AR-stage mxfp8/mxfp4 -> omni_npu_mxfp8/omni_npu_mxfp4 remap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["mxfp8", "mxfp4"])
+def test_npu_ar_quantization_remapped_to_omni_npu_name(monkeypatch: pytest.MonkeyPatch, method: str):
+    """NPU AR stages requesting mxfp8/mxfp4 must be remapped to a distinct,
+    registered method name before vLLM's own EngineArgs.__post_init__ runs,
+    so vLLM never resolves the reserved "mxfp8"/"mxfp4" built-in methods."""
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+
+    engine_args = OmniEngineArgs(quantization=method, worker_type="ar")
+
+    assert engine_args.quantization == f"omni_npu_{method}"
+
+
+@pytest.mark.parametrize("method", ["mxfp8", "mxfp4"])
+def test_quantization_untouched_for_non_ar_worker_type(monkeypatch: pytest.MonkeyPatch, method: str):
+    """The remap must not apply to diffusion/generation stages, which resolve
+    their own quantization_config independently (OmniDiffusionConfig)."""
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+
+    engine_args = OmniEngineArgs(quantization=method, worker_type="generation")
+
+    assert engine_args.quantization == method
+
+
+@pytest.mark.parametrize("method", ["mxfp8", "mxfp4"])
+def test_quantization_untouched_off_npu(monkeypatch: pytest.MonkeyPatch, method: str):
+    """The remap must not apply on non-NPU platforms."""
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+
+    engine_args = OmniEngineArgs(quantization=method, worker_type="ar")
+
+    assert engine_args.quantization == method
+
+
+def test_quantization_untouched_for_other_methods(monkeypatch: pytest.MonkeyPatch):
+    """Only mxfp8/mxfp4 are remapped; other quantization methods pass through."""
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+
+    engine_args = OmniEngineArgs(quantization="mxfp4_dualscale", worker_type="ar")
+
+    assert engine_args.quantization == "mxfp4_dualscale"

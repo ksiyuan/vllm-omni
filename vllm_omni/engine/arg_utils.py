@@ -202,6 +202,19 @@ class OmniEngineArgs(EngineArgs):
     has_sampling_extra_args: bool = False
 
     def __post_init__(self) -> None:
+        # NPU AR stages requesting mxfp8/mxfp4 must be remapped to a distinct,
+        # registered method name *before* super().__post_init__() runs: vLLM
+        # reserves "mxfp8"/"mxfp4" as its own built-in quantization methods
+        # (an online-quant shorthand and a native Triton MXFP4 config,
+        # respectively), unrelated to vllm-omni's Ascend diffusion configs.
+        # Remapping early lets vLLM's normal ModelConfig lifecycle validate,
+        # detect serialized checkpoints, and hash this method like any other.
+        if current_omni_platform.is_npu() and self.worker_type == "ar" and self.quantization in ("mxfp8", "mxfp4"):
+            if self.quantization == "mxfp8":
+                from vllm_omni.quantization.mxfp8_config import OmniNPUMxfp8Config  # noqa: F401
+            else:
+                from vllm_omni.quantization.mxfp4_config import OmniNPUMxfp4Config  # noqa: F401
+            self.quantization = f"omni_npu_{self.quantization}"
         if self.worker_cls is None:
             if self.worker_type == "ar":
                 self.worker_cls = current_omni_platform.get_omni_ar_worker_cls()
