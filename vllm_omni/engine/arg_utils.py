@@ -201,7 +201,17 @@ class OmniEngineArgs(EngineArgs):
     custom_pipeline_args: dict[str, Any] | None = None
     has_sampling_extra_args: bool = False
 
+    def _register_omni_npu_quant_configs(self) -> None:
+        if not (current_omni_platform.is_npu() and self.worker_type == "ar"):
+            return
+        # HF-config-only AR startup still needs both Omni MXFP configs loaded
+        # before the parent EngineArgs lifecycle resolves quantization.
+        from vllm_omni.quantization.mxfp4_config import OmniNPUMxfp4Config  # noqa: F401
+        from vllm_omni.quantization.mxfp8_config import OmniNPUMxfp8Config  # noqa: F401
+
     def __post_init__(self) -> None:
+        self._register_omni_npu_quant_configs()
+
         # NPU AR stages requesting mxfp8/mxfp4 must be remapped to a distinct,
         # registered method name *before* super().__post_init__() runs: vLLM
         # reserves "mxfp8"/"mxfp4" as its own built-in quantization methods

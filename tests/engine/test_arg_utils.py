@@ -20,6 +20,9 @@ from vllm_omni.engine.arg_utils import OmniEngineArgs
 from vllm_omni.engine.async_omni_engine import AsyncOmniEngine
 from vllm_omni.engine.stage_init_utils import build_engine_args_dict
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.quantization import build_quant_config
+from vllm_omni.quantization.mxfp4_config import OmniNPUMxfp4Config
+from vllm_omni.quantization.mxfp8_config import OmniNPUMxfp8Config
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -357,3 +360,29 @@ def test_quantization_untouched_for_other_methods(monkeypatch: pytest.MonkeyPatc
     engine_args = OmniEngineArgs(quantization="mxfp4_dualscale", worker_type="ar")
 
     assert engine_args.quantization == "mxfp4_dualscale"
+
+
+@pytest.mark.parametrize(
+    ("resolved_method", "expected_cls"),
+    [
+        ("omni_npu_mxfp8", OmniNPUMxfp8Config),
+        ("omni_npu_mxfp4", OmniNPUMxfp4Config),
+    ],
+)
+def test_hf_config_only_npu_ar_registers_mxfp_configs_before_parent_post_init(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved_method: str,
+    expected_cls: type,
+):
+    """HF-config-only AR startup must see Omni MXFP configs even when CLI quantization is unset."""
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+
+    def fake_parent_post_init(self):
+        cfg = build_quant_config(resolved_method)
+        assert isinstance(cfg, expected_cls)
+
+    monkeypatch.setattr(EngineArgs, "__post_init__", fake_parent_post_init)
+
+    engine_args = OmniEngineArgs(quantization=None, worker_type="ar")
+
+    assert engine_args.quantization is None
